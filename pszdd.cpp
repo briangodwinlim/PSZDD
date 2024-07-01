@@ -16,31 +16,33 @@ using namespace tdzdd;
 
 const int INF = INT_MAX / 2;    // Infinity placeholder
 
-// Stochastic graph class with edge failure probabilities and source vertices
+// Stochastic graph class
+// Features: edge survival probability, edge length
+// Features: source vertices
 class StochGraph: public Graph {
 private:
     std::set<std::string> vertices, sources;
-    std::map<std::pair<std::string,std::string>,double> probabilities, distances;
+    std::map<std::pair<std::string,std::string>,double> probabilities, lengths;
 
 public:
-    void addEdge(std::string vertexName1, std::string vertexName2, double prob = 1.0, double dist = 1.0) {
+    void addEdge(std::string vertexName1, std::string vertexName2, double prob = 1.0, double len = 1.0) {
         Graph::addEdge(vertexName1, vertexName2);
+        addVertex(vertexName1);
+        addVertex(vertexName2);
         
         assert(0.0 <= prob && prob <= 1.0);
         probabilities[std::make_pair(vertexName1, vertexName2)] = prob;
-        probabilities[std::make_pair(vertexName2, vertexName1)] = prob;
 
-        assert(dist > 0.0);
-        distances[std::make_pair(vertexName1, vertexName2)] = dist;
-        distances[std::make_pair(vertexName2, vertexName1)] = dist;
+        assert(len > 0.0);
+        lengths[std::make_pair(vertexName1, vertexName2)] = len;
     }
 
     double getProb(EdgeNumber e) const {
         return probabilities.at(edgeName(e));
     }
 
-    double getDist(EdgeNumber e) const {
-        return distances.at(edgeName(e));
+    double getLen(EdgeNumber e) const {
+        return lengths.at(edgeName(e));
     }
 
     void addVertex(std::string vertex) {
@@ -58,10 +60,70 @@ public:
     std::set<std::string> getSources() const {
         return sources;
     }
+
+    void readEdges(std::string const& filename, bool len) {
+        std::ifstream is(filename.c_str(), std::ios::in);
+        readEdges(is, len);
+        Graph::update();
+    }
+
+    void readSources(std::string const& filename) {
+        std::ifstream is(filename.c_str(), std::ios::in);
+        std::string s;
+        while (getline(is, s, ' ')) {
+            addSource(s);
+        }
+    }
+
+private:
+    void readEdges(std::istream& is, bool len) {
+        std::string s;
+        std::map<std::string,std::string> edge;
+
+        while (is) {
+            char ss = is.get();
+
+            if (isspace(ss)) {
+                if (!s.empty()) {
+                    if (!edge.count("v1")) {
+                        edge["v1"] = s;
+                    }
+                    else if (!edge.count("v2")) {
+                        edge["v2"] = s;
+                    }
+                    else if (!edge.count("p")) {
+                        edge["p"] = s;
+                    }
+                    else if (!edge.count("l") and len) {
+                        edge["l"] = s;
+                    }
+                    else {
+                        throw std::runtime_error("ERROR: Exceeded expected number of tokens in a line");
+                    }
+                    s.clear();
+                }
+
+                if (ss == '\n') {
+                    // Default values
+                    edge["l"] = edge.count("l") ? edge["l"] : "1.0";
+                    if (edge.count("v1") && edge.count("v2") && edge.count("p")) {
+                        addEdge(edge["v1"], edge["v2"], std::stod(edge["p"]), std::stod(edge["l"])); 
+                        edge.clear();
+                    }
+                    else {
+                        throw std::runtime_error("ERROR: Less than minimum number of tokens in a line");
+                    }
+                }
+            }
+            else {
+                s += ss;
+            }
+        }
+    }
 };
 
 // DdEval for finding the shortest distance
-class MinDist: public DdEval<MinDist,double> {
+class MinDist: public DdEval<MinDist,long double> {
 private:
     int const numEdges;
     StochGraph const& graph;
@@ -71,24 +133,25 @@ public:
         : graph(graph), numEdges(graph.edgeSize()) {
     }
 
-    void evalTerminal(double &v, int id) const {
+    void evalTerminal(long double &v, int id) const {
         v = id ? 0.0 : INF;
     }
 
-    void evalNode(double &v, int level, DdValues<double,2> const& values) const {
-        v = std::min(values.get(0), values.get(1) + graph.getDist(numEdges - level));
+    void evalNode(long double &v, int level, DdValues<long double,2> const& values) const {
+        v = std::min(values.get(0), values.get(1) + graph.getLen(numEdges - level));
     }
 };
 
 // DdEval for calculating the per-vertex path survival probabilities
 class PathSurvival: public DdEval<PathSurvival,double> {
 private:
+    bool const prob;
     int const numEdges;
     StochGraph const& graph;
 
 public:
-    PathSurvival(StochGraph const& graph) 
-        : graph(graph), numEdges(graph.edgeSize()) {
+    PathSurvival(StochGraph const& graph, bool prob = true) 
+        : graph(graph), numEdges(graph.edgeSize()), prob(prob) {
     }
 
     void evalTerminal(double &v, int id) const {
@@ -96,20 +159,26 @@ public:
     }
 
     void evalNode(double &v, int level, DdValues<double,2> const& values) const {
-        v = values.get(0) + graph.getProb(numEdges - level) * values.get(1);
+        double v0 = values.get(0);
+        double v1 = values.get(1);
+        if (prob) v1 *= graph.getProb(numEdges - level);
+        v = v0 + v1;
     }
 };
 
 
 std::map<std::string,bool> opt;
 std::string options[][2] = { //
+        {"len", "Flag including edge length in edgelist"}, //
         {"graph", "Dump input graph to STDOUT in DOT format"}, //
         {"adjusted", "Output adjusted per-vertex path survival probabilities"}, //
+        {"nodes", "Output total ZDD nodes per vertex"}, //
+        {"paths", "Output total single-source paths per vertex"}, //
     };
 
 void usage(char const* cmd) {
     std::cerr << "usage: " << cmd
-              << " <edgelist> <probabilities> <sources> [ <options>... ]\n";
+              << " <edgelist> <sources> [ <options>... ]\n";
     std::cerr << "options\n";
     for (unsigned i = 0; i < sizeof(options) / sizeof(options[0]); ++i) {
         std::cerr << "  -" << options[i][0];
@@ -121,10 +190,10 @@ void usage(char const* cmd) {
 }
 
 // Global variables
-StochGraph graph;                                                       // Stochastic graph object
-double density;                                                         // Graph density
-int numEdges, numVertices;                                              // Number of edges and vertices
-std::string edgelistFilename, probabilitiesFilename, sourcesFilename;   // Input filenames
+StochGraph graph;                               // Stochastic graph object
+double density;                                 // Graph density
+int numEdges, numVertices;                      // Number of edges and vertices
+std::string edgelistFilename, sourcesFilename;  // Input filenames
 
 int main(int argc, char *argv[]) {
     for (unsigned i = 0; i < sizeof(options) / sizeof(options[0]); ++i) {
@@ -147,9 +216,6 @@ int main(int argc, char *argv[]) {
             else if (edgelistFilename.empty()) {
                 edgelistFilename = s;
             }
-            else if (probabilitiesFilename.empty()) {
-                probabilitiesFilename = s;
-            }
             else if (sourcesFilename.empty()) {
                 sourcesFilename = s;
             }
@@ -169,41 +235,9 @@ int main(int argc, char *argv[]) {
 
     // Read inputs
     try {
-        std::ifstream edgelistFile, probabilitiesFile, sourcesFile;
-        edgelistFile.open(edgelistFilename);
-        probabilitiesFile.open(probabilitiesFilename);
-        sourcesFile.open(sourcesFilename);
-        std::string edge, probability, source;
-        
-        // Get edges and probabilities
-        getline(probabilitiesFile, probability);
-        std::istringstream probabilitySS(probability);
-        while (getline(edgelistFile, edge)) {
-            std::istringstream edgeSS(edge);
-            std::string u, v, p;
-            edgeSS >> u >> v;
-            probabilitySS >> p;
-
-            graph.addVertex(u);
-            graph.addVertex(v);
-            graph.addEdge(u, v, std::stod(p), 1.0);  // Can be physical distances
-        }
-        
-        // Get sources
-        getline(sourcesFile, source);
-        std::istringstream sourceSS(source);
-        std::string s;
-        while (getline(sourceSS, s, ' ')) {
-            graph.addSource(s);
-        }
-        
-        // Close all files
-        edgelistFile.close();
-        probabilitiesFile.close();
-        sourcesFile.close();
-
-        // Update graph
-        graph.update();
+        // Read files
+        graph.readEdges(edgelistFilename, opt["len"]);
+        graph.readSources(sourcesFilename);
 
         // Output graph information
         numVertices = graph.vertexSize();
@@ -225,11 +259,17 @@ int main(int argc, char *argv[]) {
 
     // Path survival probabilities
     try {
-        std::map<std::string,double> min_path;     // Shortest distance to any source
-        std::map<std::string,double> per_vertex;   // Per-vertex path survival probabilities
+        std::map<std::string,long long> num_path;       // Number of single-source paths
+        std::map<std::string,long double> sum_path;     // Sum of path survival probabilities
+        std::map<std::string,long double> min_path;     // Shortest distance to any source
+        std::map<std::string,long long> num_node;       // Number of ZDD nodes
+        std::map<std::string,long double> per_vertex;   // Per-vertex path survival probabilities
         for (std::string v: graph.getVertices()) {
+            num_path[v] = 0;
+            sum_path[v] = 0;
             min_path[v] = INF;
-            per_vertex[v] = 0.0;
+            num_node[v] = 0;
+            per_vertex[v] = 0;
         }
 
         // Initialize Frontier-based search and Degree constraint
@@ -246,7 +286,6 @@ int main(int argc, char *argv[]) {
             if (graph.getSources().count(v)) continue;
             
             // Set degree constaint for non-source vertex
-            long long numPaths = 0;
             dc.setConstraint(v, &OnlyOne);
 
             for (std::string s: graph.getSources()) {
@@ -257,14 +296,17 @@ int main(int argc, char *argv[]) {
                 DdStructure<2> dd(zddIntersection(fbs, dc));
                 dd.zddReduce();
 
-                // Add number of single-source paths to source
-                numPaths += dd.evaluate(ZddCardinality<long long,2>());
+                // Compute number of single-source paths
+                num_path[v] += dd.evaluate(PathSurvival(graph, false));
 
-                // Compute path survival probabilities
-                per_vertex[v] += dd.evaluate(PathSurvival(graph));
+                // Compute sum of path survival probabilities
+                sum_path[v] += dd.evaluate(PathSurvival(graph, true));
 
-                // Update shortest path to source
+                // Update shortest distance to any source
                 min_path[v] = std::min(min_path[v], dd.evaluate(MinDist(graph)));
+
+                // Record number of ZDD nodes
+                num_node[v] += dd.size();
 
                 // Reset degree constriant
                 dc.setConstraint(s, &OnlyZero);
@@ -272,40 +314,36 @@ int main(int argc, char *argv[]) {
             // Reset degree constraint
             dc.setConstraint(v, &ZeroOrTwo);
 
-            // Average path survival probabilties
-            per_vertex[v] /= numPaths;
+            // Per-vertex path survival probability
+            per_vertex[v] = sum_path[v] / num_path[v];
         }
-        MessageHandler::showMessages();
+        MessageHandler::showMessages(true);
 
         // Per-vertex path survival probabilities
-        mh << "Per-Vertex Path Survival Probability:\n";
-        if (!opt["adjusted"]) {
-            mh << std::left << std::setw(5) << "v" << std::setw(10) << "PV" << "\n";
-            for (std::string v: graph.getVertices()) {
-                mh << std::left 
-                   << std::setw(5) << v 
-                   << std::setw(10) << per_vertex[v] << "\n"; 
-            }
-        }
-        else {
-            mh << std::left << std::setw(5) << "v" << std::setw(10) << "PV" << std::setw(10) << "Adj. PV" << "\n";
-            for (std::string v: graph.getVertices()) {
-                mh << std::left 
-                   << std::setw(5) << v 
-                   << std::setw(10) << per_vertex[v]
-                   << std::setw(10) << pow(per_vertex[v], density) << "\n"; 
-            }
+        mh << "Per-Vertex Path Survival Probability (PV PSP):\n";
+        mh << std::left << std::setw(10) << "v" << std::setw(15) << "PV PSP";
+        if (opt["adjusted"]) mh << std::left << std::setw(15) << "Adj. PV PSP";
+        if (opt["nodes"]) mh << std::left << std::setw(15) << "ZDD Nodes";
+        if (opt["paths"]) mh << std::left << std::setw(15) << "SS Paths";
+        mh << "\n";
+        for (std::string v: graph.getVertices()) {
+            mh << std::left << std::setw(10) << v << std::setw(15) << per_vertex[v];
+            if (opt["adjusted"]) mh << std::left << std::setw(15) << pow(per_vertex[v], density);
+            if (opt["nodes"]) mh << std::left << std::setw(15) << num_node[v];
+            if (opt["paths"]) mh << std::left << std::setw(15) << num_path[v];
+            mh << "\n"; 
         }
 
         // Total path survival probability
-        double numerator = 0.0;
-        double denominator = 0.0;
+        long double numerator = 0.0;
+        long double denominator = 0.0;
         for (std::string v: graph.getVertices()) {
             if (graph.getSources().count(v)) continue;
             numerator += min_path[v] * pow(per_vertex[v], density);
             denominator += min_path[v];
         }
-        mh << "Total Path Survival Probability: " << numerator / denominator << "\n";
+        long double total = numerator / denominator;
+        mh << "Total Path Survival Probability (Total PSP): " << total << "\n";
     }
     catch (std::exception& e) {
         std::cerr << e.what() << "\n";
