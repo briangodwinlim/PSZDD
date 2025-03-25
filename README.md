@@ -1,6 +1,6 @@
-# Path Survival Probabilities using Zero-Suppressed Binary Decision Diagram
+# Path Survival Reliabilities using Zero-Suppressed Binary Decision Diagram
 
-Novel reliability measures tailored for stochastic graphs with designated source vertices and failure-probability-weighted edges called Path Survival Probabilities that pertain to:
+Novel reliability measures tailored for stochastic graphs with designated source vertices and failure-probability-weighted edges called Path Survival Reliabilities that pertain to:
 
 - A per-vertex reliability measure quantifying the average survival likelihood of single-source paths from a vertex to any source
 - An overall reliability measure incorporating the graph density and the shortest distance to a source as regulating elements
@@ -37,7 +37,7 @@ Example:
 2 3 0.5
 ```
 
-`<edgelist>` specifies the edges of the network with their attributes. Each line starts with the two vertices corresponding to the endpoints of the edge. This is followed by the probability of non-failure for the edge. The edge length follow if the flag `len` is used.
+`<edgelist>` specifies the edges of the network with their attributes. Each line starts with the two vertices corresponding to the endpoints of the edge. This is followed by the probability of non-failure for the edge. The edge length and edge capacity follow if the flag `len` and `cap` are used, respectively.
 
 ### sources
 
@@ -51,7 +51,7 @@ Example:
 
 ## Preprint
 
-- [Path Survival Probabilities as Measures of Reliability for Lifeline Utility Networks](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4538362)
+- [Path Survival Reliabilities as Measures of Reliability for Lifeline Utility Networks](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4538362)
 
 ## Related Repositories
 
